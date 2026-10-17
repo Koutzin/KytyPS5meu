@@ -32,6 +32,9 @@ public:
 	// Queue after changing ownership; a concurrent drain must not consume an event
 	// before the dirty pages it describes become visible.
 	void                   QueueBdaSync(uint64_t vaddr, uint64_t size);
+	[[nodiscard]] bool     HasPendingBdaSync() const noexcept {
+		return m_has_bda_sync.load(std::memory_order_acquire);
+	}
 	[[nodiscard]] RangeSet TakeBdaSync();
 	// Removes protection from a range and flushes GPU-owned data when required.
 	template <typename Flush>
@@ -155,6 +158,7 @@ private:
 	std::vector<std::unique_ptr<RegionManager>>    m_region_storage;
 	std::mutex                                     m_region_mutex;
 	std::mutex                                     m_bda_sync_mutex;
+	std::atomic<bool>                              m_has_bda_sync {false};
 	RangeSet                                       m_bda_sync;
 	PageManager&                                   m_page_manager;
 };

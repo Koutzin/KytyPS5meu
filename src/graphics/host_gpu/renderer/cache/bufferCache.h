@@ -81,6 +81,9 @@ public:
 	[[nodiscard]] bool IsRegionGpuModified(uint64_t vaddr, uint64_t size);
 	void               ProcessFaultBuffer();
 	void               SynchronizeBda(const RangeSet& mapped);
+	[[nodiscard]] bool HasPendingBdaSync() const noexcept {
+		return m_memory_tracker.HasPendingBdaSync();
+	}
 	void               QueueBdaSync(uint64_t vaddr, uint64_t size) {
 		m_memory_tracker.QueueBdaSync(vaddr, size);
 	}

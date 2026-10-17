@@ -71,10 +71,14 @@ void MemoryTracker::QueueBdaSync(uint64_t vaddr, uint64_t size) {
 	const auto end   = Common::AlignUp(vaddr + size, TRACKER_PAGE_SIZE);
 	std::lock_guard lock(m_bda_sync_mutex);
 	m_bda_sync.Add(begin, end - begin);
+	if (!m_bda_sync.Empty()) {
+		m_has_bda_sync.store(true, std::memory_order_release);
+	}
 }
 
 RangeSet MemoryTracker::TakeBdaSync() {
 	std::lock_guard lock(m_bda_sync_mutex);
+	m_has_bda_sync.store(false, std::memory_order_release);
 	return std::exchange(m_bda_sync, RangeSet {});
 }
 

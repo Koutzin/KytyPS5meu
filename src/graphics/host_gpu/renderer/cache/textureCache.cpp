@@ -1034,7 +1034,9 @@ void TextureCache::MaterializeColorClear(ImageId id, const ImageDesc& desc,
 		auto& image         = m_slot_images[id];
 		image.info.metadata = desc.info.metadata;
 		// Native color metadata must not retain a reused HTile/CMask/FMask clear flag.
-		m_surface_metas.erase(range.address);
+		if (!m_surface_metas.empty()) {
+			m_surface_metas.erase(range.address);
+		}
 		if (range.size == 0 || desc.info.resources.levels != 1) {
 			return;
 		}
@@ -1060,21 +1062,39 @@ void TextureCache::MaterializeColorClear(ImageId id, const ImageDesc& desc,
 		m_buffer_cache.ReadMemory(range.address, range.size, false);
 	}
 	const auto slice_size = range.size / layers;
+	std::array<uint8_t, MetadataBlockSize> block {};
 	for (uint32_t slice = 0; slice < count; slice++) {
 		const auto address = range.address + slice_size * (first + slice);
-		uint8_t code = 0;
-		if (!LibKernel::Memory::TryReadBacking(address, &code, sizeof(code))) {
+		std::array<uint8_t, 64> probe {};
+		if (!LibKernel::Memory::TryReadBacking(address, probe.data(), probe.size())) {
 			EXIT("TextureCache: failed to read color metadata backing\n");
 		}
+		const uint8_t code = probe[0];
 		vk::ClearValue clear {};
 		if (!DecodeColorClear(desc, code, clear.color)) {
 			continue;
 		}
-		std::vector<uint8_t> bytes(slice_size);
-		if (!LibKernel::Memory::TryReadBacking(address, bytes.data(), bytes.size())) {
+		if (!std::all_of(probe.begin(), probe.end(), [code](uint8_t byte) { return byte == code; })) {
+			continue;
+		}
+		uint8_t tail_code = 0;
+		if (!LibKernel::Memory::TryReadBacking(address + slice_size - 1, &tail_code, sizeof(tail_code))) {
 			EXIT("TextureCache: failed to read color metadata slice\n");
 		}
-		if (!std::all_of(bytes.begin(), bytes.end(), [code](uint8_t byte) { return byte == code; })) {
+		if (tail_code != code) {
+			continue;
+		}
+		bool uniform = true;
+		for (uint64_t offset = 0; offset < slice_size; offset += MetadataBlockSize) {
+			if (!LibKernel::Memory::TryReadBacking(address + offset, block.data(), block.size())) {
+				EXIT("TextureCache: failed to read color metadata slice\n");
+			}
+			if (!std::all_of(block.begin(), block.end(), [code](uint8_t byte) { return byte == code; })) {
+				uniform = false;
+				break;
+			}
+		}
+		if (!uniform) {
 			continue;
 		}
 		{
@@ -1093,9 +1113,11 @@ void TextureCache::MaterializeColorClear(ImageId id, const ImageDesc& desc,
 		// Publish the conversion's expanded keys without treating them as guest writes
 		// to overlapping image data. Invalidate the buffer before updating its backing.
 		if (desc.type != BindingType::VideoOut) {
-			std::fill(bytes.begin(), bytes.end(), uint8_t {0xff});
+			block.fill(uint8_t {0xff});
 			m_buffer_cache.InvalidateMemory(address, slice_size);
-			LibKernel::Memory::WriteBacking(address, bytes.data(), bytes.size());
+			for (uint64_t offset = 0; offset < slice_size; offset += MetadataBlockSize) {
+				LibKernel::Memory::WriteBacking(address + offset, block.data(), block.size());
+			}
 		}
 	}
 }
@@ -1107,7 +1129,9 @@ void TextureCache::RefreshImage(ImageId id) {
 	     m_slot_images[image.depth_id].info.samples != 1)) {
 		return;
 	}
-	TrackImage(id);
+	if (!image.IsTracked()) {
+		TrackImage(id);
+	}
 	if (image.IsMaybeCpuDirty()) {
 		(void)image.ResolveMaybeCpuHash(image.HashGuestEdges());
 	}
